@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no"/>
+<title>Squishy Fish - Splash &amp; Flupp</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:#001a33;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:100vh;overflow:hidden;
+  font-family:'Segoe UI',Tahoma,sans-serif;
+  touch-action:none;user-select:none;
+}
+h1{
+  font-size:1.5rem;letter-spacing:2px;margin-bottom:6px;
+  background:linear-gradient(90deg,#00e5ff,#76ff03,#ff6d00);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  text-align:center;
+}
+.tagline{font-size:0.7rem;color:#80cbc4;letter-spacing:1px;margin-bottom:8px;text-align:center;}
+canvas{
+  border-radius:12px;
+  box-shadow:0 0 40px rgba(0,229,255,0.3),0 0 80px rgba(0,100,160,0.4);
+  display:block;cursor:pointer;
+}
+.hint{
+  font-size:0.7rem;color:#546e7a;margin-top:8px;letter-spacing:1px;text-align:center;
+}
+</style>
+</head>
+<body>
+<h1>🐟 Squishy Fish</h1>
+<p class="tagline">Splash &amp; Flupp!</p>
+<canvas id="c"></canvas>
+<p class="hint">SPACE / Tap = swim up &nbsp;|&nbsp; Dodge the coral reefs!</p>
+<script>
+const C = document.getElementById('c');
+const ctx = C.getContext('2d');
+
+// Responsive canvas
+const BASE_W = 420, BASE_H = 620;
+C.width = BASE_W; C.height = BASE_H;
+
+// ── Game constants ──
+const GRAVITY    = 0.38;
+const FLAP_VEL   = -7.2;
+const PIPE_W     = 62;
+const PIPE_GAP   = 155;
+const PIPE_SPEED = 2.6;
+const PIPE_INTERVAL = 88; // frames
+const FISH_X     = 90;
+const FISH_R     = 18;    // fish bounding radius
+
+// ── State ──
+let STATE = 'START'; // START | PLAY | DEAD
+let fish, pipes, bubbles, splashes, score, best, frame, pipeTimer;
+best = parseInt(localStorage.getItem('sfBest')||'0');
+
+// ── Fish ──
+function makeFish(){
+  return {y:BASE_H/2, vy:0, angle:0, squish:1, squishV:0, trail:[]};
+}
+
+// ── Pipe ──
+function makePipe(x){
+  const topH = 80 + Math.random()*(BASE_H - PIPE_GAP - 160);
+  return {x, topH, scored:false};
+}
+
+// ── Bubble particle ──
+function makeBubble(){
+  return {
+    x: Math.random()*BASE_W, y: BASE_H + 10,
+    r: 2+Math.random()*5, vy:-(0.4+Math.random()*0.8),
+    alpha:0.3+Math.random()*0.4, wobble:Math.random()*Math.PI*2
+  };
+}
+
+// ── Splash ──
+function makeSplash(x,y,color){
+  const parts=[];
+  for(let i=0;i<12;i++){
+    const a=Math.random()*Math.PI*2;
+    const sp=1+Math.random()*4;
+    parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-2,alpha:1,r:2+Math.random()*3,color});
+  }
+  return parts;
+}
+
+function initGame(){
+  fish = makeFish();
+  pipes = [];
+  bubbles = Array.from({length:30},()=>{
+    const b=makeBubble(); b.y=Math.random()*BASE_H; return b;
+  });
+  splashes = [];
+  score = 0;
+  frame = 0;
+  pipeTimer = 40;
+}
+
+function flap(){
+  if(STATE==='START'){ STATE='PLAY'; initGame(); return; }
+  if(STATE==='DEAD'){ STATE='START'; return; }
+  if(STATE==='PLAY'){
+    fish.vy = FLAP_VEL;
+    fish.squish = 0.6;
+    fish.squishV = 0.08;
+    // splash effect at fish position
+    splashes.push(...makeSplash(FISH_X, fish.y, '#00e5ff'));
+  }
+}
+
+// Input
+document.addEventListener('keydown',e=>{if(e.code==='Space'||e.key===' '){e.preventDefault();flap();}});
+C.addEventListener('pointerdown',e=>{e.preventDefault();flap();});
+
+// ── Background layers ──
+const bgCols = ['#001a33','#00263d','#002d47'];
+function drawBg(){
+  // Deep gradient
+  const grd = ctx.createLinearGradient(0,0,0,BASE_H);
+  grd.addColorStop(0,'#001020');
+  grd.addColorStop(0.5,'#002040');
+  grd.addColorStop(1,'#001830');
+  ctx.fillStyle=grd;
+  ctx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Caustic light rays
+  ctx.save();
+  ctx.globalAlpha=0.04+0.02*Math.sin(frame/40);
+  for(let i=0;i<6;i++){
+    const xr = BASE_W*0.1 + i*BASE_W*0.16 + Math.sin(frame/60+i)*15;
+    ctx.fillStyle='#00e5ff';
+    ctx.beginPath();
+    ctx.moveTo(xr,0);
+    ctx.lineTo(xr+30,BASE_H);
+    ctx.lineTo(xr+10,BASE_H);
+    ctx.lineTo(xr-20,0);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Sandy floor details
+  ctx.fillStyle='#1a3a2a';
+  ctx.fillRect(0,BASE_H-28,BASE_W,28);
+  ctx.fillStyle='#1e4a30';
+  for(let i=0;i<8;i++){
+    ctx.beginPath();
+    ctx.ellipse(30+i*55+Math.sin(i)*10, BASE_H-14, 20+i%3*8, 12, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Small decorative corals on floor
+  ctx.strokeStyle='#ff6b6b'; ctx.lineWidth=2.5;
+  for(let i=0;i<5;i++){
+    const cx=50+i*80, cy=BASE_H-28;
+    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx,cy-18-i*3);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(cx,cy-10);ctx.lineTo(cx-8,cy-20);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(cx,cy-10);ctx.lineTo(cx+8,cy-20);ctx.stroke();
+  }
+}
+
+// ── Bubbles ──
+function updateBubbles(){
+  bubbles.forEach(b=>{
+    b.y += b.vy;
+    b.wobble += 0.04;
+    b.x += Math.sin(b.wobble)*0.4;
+    if(b.y < -10){ Object.assign(b, makeBubble()); b.y=BASE_H+5; }
+  });
+  if(frame%12===0) bubbles.push(makeBubble());
+  if(bubbles.length>60) bubbles.splice(0,5);
+}
+function drawBubbles(){
+  bubbles.forEach(b=>{
+    ctx.save();
+    ctx.globalAlpha=b.alpha;
+    ctx.strokeStyle='rgba(150,230,255,0.7)';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    ctx.stroke();
+    // shine
+    ctx.fillStyle='rgba(255,255,255,0.3)';
+    ctx.beginPath();
+    ctx.arc(b.x-b.r*0.3,b.y-b.r*0.3,b.r*0.3,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+// ── Pipes (coral reefs) ──
+function drawPipe(p){
+  const x=p.x, tw=PIPE_W, topH=p.topH, botY=topH+PIPE_GAP;
+  const botH=BASE_H-botY-28;
+
+  // Coral reef colour gradient
+  function coralGrad(y1,y2){
+    const g=ctx.createLinearGradient(x,y1,x+tw,y2);
+    g.addColorStop(0,'#1b5e20');
+    g.addColorStop(0.4,'#2e7d32');
+    g.addColorStop(0.7,'#43a047');
+    g.addColorStop(1,'#1b5e20');
+    return g;
+  }
+
+  // Top pipe body
+  ctx.fillStyle=coralGrad(0,topH);
+  roundRect(ctx, x, 0, tw, topH, [0,0,8,8]);
+  ctx.fill();
+
+  // Top pipe cap
+  ctx.fillStyle='#388e3c';
+  roundRect(ctx, x-6, topH-18, tw+12, 22, [4,4,8,8]);
+  ctx.fill();
+  ctx.strokeStyle='#1b5e20'; ctx.lineWidth=1.5;
+  roundRect(ctx, x-6, topH-18, tw+12, 22, [4,4,8,8]);
+  ctx.stroke();
+
+  // Coral bumps on top pipe
+  ctx.fillStyle='#e53935';
+  for(let i=0;i<3;i++){
+    ctx.beginPath();
+    ctx.arc(x+12+i*18, topH-22, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Bottom pipe body
+  if(botH>0){
+    ctx.fillStyle=coralGrad(botY,BASE_H);
+    roundRect(ctx, x, botY, tw, botH, [8,8,0,0]);
+    ctx.fill();
+  }
+
+  // Bottom pipe cap
+  ctx.fillStyle='#388e3c';
+  roundRect(ctx, x-6, botY-4, tw+12, 22, [8,8,4,4]);
+  ctx.fill();
+  ctx.strokeStyle='#1b5e20'; ctx.lineWidth=1.5;
+  roundRect(ctx, x-6, botY-4, tw+12, 22, [8,8,4,4]);
+  ctx.stroke();
+
+  // Coral bumps on bottom pipe
+  ctx.fillStyle='#ff7043';
+  for(let i=0;i<3;i++){
+    ctx.beginPath();
+    ctx.arc(x+12+i*18, botY+24, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Highlights
+  ctx.fillStyle='rgba(255,255,255,0.07)';
+  ctx.fillRect(x+4, 0, 8, topH);
+  if(botH>0) ctx.fillRect(x+4, botY, 8, botH);
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  const [tl,tr,br,bl]=Array.isArray(r)?r:[r,r,r,r];
+  ctx.beginPath();
+  ctx.moveTo(x+tl,y);
+  ctx.lineTo(x+w-tr,y); ctx.quadraticCurveTo(x+w,y,x+w,y+tr);
+  ctx.lineTo(x+w,y+h-br); ctx.quadraticCurveTo(x+w,y+h,x+w-br,y+h);
+  ctx.lineTo(x+bl,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-bl);
+  ctx.lineTo(x,y+tl); ctx.quadraticCurveTo(x,y,x+tl,y);
+  ctx.closePath();
+}
+
+// ── Fish drawing ──
+function drawFish(f){
+  ctx.save();
+  ctx.translate(FISH_X, f.y);
+  ctx.rotate(f.angle);
+  ctx.scale(f.squish, 2-f.squish);
+
+  const t = frame;
+
+  // Tail
+  const tailWag = Math.sin(t*0.25)*8;
+  ctx.fillStyle='#ff6d00';
+  ctx.beginPath();
+  ctx.moveTo(-10, 0);
+  ctx.lineTo(-28, -12+tailWag);
+  ctx.lineTo(-28, 12+tailWag);
+  ctx.closePath();
+  ctx.fill();
+
+  // Body shadow
+  ctx.fillStyle='rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(2,4,22,14,0,0,Math.PI*2);
+  ctx.fill();
+
+  // Body
+  const bodyGrd = ctx.createRadialGradient(-4,-6,2, 0,0,22);
+  bodyGrd.addColorStop(0,'#ffeb3b');
+  bodyGrd.addColorStop(0.5,'#ff9800');
+  bodyGrd.addColorStop(1,'#e65100');
+  ctx.fillStyle=bodyGrd;
+  ctx.beginPath();
+  ctx.ellipse(0,0,22,14,0,0,Math.PI*2);
+  ctx.fill();
+
+  // Stripe
+  ctx.strokeStyle='rgba(255,255,255,0.3)'; ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.ellipse(2,0,14,10,0,0,Math.PI*2);
+  ctx.stroke();
+
+  // Fin
+  ctx.fillStyle='#ff5722';
+  ctx.beginPath();
+  ctx.moveTo(0,-14);
+  ctx.quadraticCurveTo(-8,-26+Math.sin(t*0.3)*3, -16,-14);
+  ctx.quadraticCurveTo(-8,-8,0,-14);
+  ctx.fill();
+
+  // Eye white
+  ctx.fillStyle='#fff';
+  ctx.beginPath();
+  ctx.arc(10,-3,5,0,Math.PI*2);
+  ctx.fill();
+  // Pupil
+  ctx.fillStyle='#1a237e';
+  ctx.beginPath();
+  ctx.arc(11.5,-3,3,0,Math.PI*2);
+  ctx.fill();
+  // Shine
+  ctx.fillStyle='#fff';
+  ctx.beginPath();
+  ctx.arc(12.5,-4.5,1.2,0,Math.PI*2);
+  ctx.fill();
+
+  // Mouth
+  ctx.strokeStyle='#bf360c'; ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.arc(17,2,3,0.2,Math.PI-0.2);
+  ctx.stroke();
+
+  // Bubbles from mouth when flapping
+  if(f.squish < 0.85){
+    ctx.fillStyle='rgba(150,230,255,0.6)';
+    for(let i=0;i<2;i++){
+      ctx.beginPath();
+      ctx.arc(22+i*8,-2+i*4, 2.5-i*0.5, 0,Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+
+  // Trail
+  f.trail.forEach((pt,i)=>{
+    ctx.save();
+    ctx.globalAlpha=(i/f.trail.length)*0.18;
+    ctx.fillStyle='#00e5ff';
+    ctx.beginPath();
+    ctx.ellipse(pt.x,pt.y,8*(i/f.trail.length),5*(i/f.trail.length),0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+// ── Splash particles ──
+function updateSplashes(){
+  for(let i=splashes.length-1;i>=0;i--){
+    const p=splashes[i];
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.15; p.alpha-=0.035;
+    if(p.alpha<=0) splashes.splice(i,1);
+  }
+}
+function drawSplashes(){
+  splashes.forEach(p=>{
+    ctx.save();
+    ctx.globalAlpha=p.alpha;
+    ctx.fillStyle=p.color;
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+// ── Collision ──
+function checkCollision(){
+  const fx=FISH_X, fy=fish.y, fr=FISH_R-3;
+  // Floor / ceiling
+  if(fy - fr < 0 || fy + fr > BASE_H-28) return true;
+  // Pipes
+  for(const p of pipes){
+    if(fx+fr > p.x && fx-fr < p.x+PIPE_W){
+      if(fy-fr < p.topH || fy+fr > p.topH+PIPE_GAP) return true;
+    }
+  }
+  return false;
+}
+
+// ── HUD ──
+function drawScore(){
+  // Score
+  ctx.save();
+  ctx.shadowColor='rgba(0,229,255,0.8)'; ctx.shadowBlur=15;
+  ctx.fillStyle='#fff';
+  ctx.font='bold 48px "Segoe UI",sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText(score, BASE_W/2, 70);
+  ctx.restore();
+
+  // Best
+  ctx.fillStyle='rgba(255,255,255,0.45)';
+  ctx.font='14px "Segoe UI",sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText('BEST: '+best, BASE_W/2, 92);
+}
+
+// ── Overlay screens ──
+function drawStartScreen(){
+  // Panel
+  ctx.save();
+  ctx.fillStyle='rgba(0,15,30,0.82)';
+  roundRect(ctx, BASE_W/2-150, BASE_H/2-160, 300, 310, 20);
+  ctx.fill();
+  ctx.strokeStyle='rgba(0,229,255,0.4)'; ctx.lineWidth=2;
+  roundRect(ctx, BASE_W/2-150, BASE_H/2-160, 300, 310, 20);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.textAlign='center';
+
+  // Fish emoji / decoration
+  ctx.font='52px serif';
+  ctx.fillText('🐠', BASE_W/2, BASE_H/2-100);
+
+  ctx.fillStyle='#00e5ff';
+  ctx.font='bold 26px "Segoe UI"';
+  ctx.fillText('Squishy Fish', BASE_W/2, BASE_H/2-55);
+
+  ctx.fillStyle='#76ff03';
+  ctx.font='bold 15px "Segoe UI"';
+  ctx.fillText('Splash & Flupp!', BASE_W/2, BASE_H/2-30);
+
+  ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.font='13px "Segoe UI"';
+  ctx.fillText('Dodge the coral reefs!', BASE_W/2, BASE_H/2+5);
+  ctx.fillText('Swim as far as you can!', BASE_W/2, BASE_H/2+25);
+
+  if(best>0){
+    ctx.fillStyle='#ffd740';
+    ctx.font='13px "Segoe UI"';
+    ctx.fillText('🏆 Best: '+best, BASE_W/2, BASE_H/2+52);
+  }
+
+  // Pulsing button
+  const pulse = 0.93+0.07*Math.sin(frame/15);
+  ctx.save();
+  ctx.translate(BASE_W/2, BASE_H/2+105);
+  ctx.scale(pulse,pulse);
+  const bg=ctx.createLinearGradient(-80,-22,80,22);
+  bg.addColorStop(0,'#00b0ff'); bg.addColorStop(1,'#00e676');
+  ctx.fillStyle=bg;
+  roundRect(ctx,-90,-26,180,52,26);
+  ctx.fill();
+  ctx.fillStyle='#001a33';
+  ctx.font='bold 17px "Segoe UI"';
+  ctx.fillText('SPACE / TAP TO START', 0, 7);
+  ctx.restore();
+}
+
+function drawDeadScreen(){
+  ctx.save();
+  ctx.fillStyle='rgba(0,10,20,0.85)';
+  roundRect(ctx, BASE_W/2-155, BASE_H/2-175, 310, 345, 20);
+  ctx.fill();
+  ctx.strokeStyle='rgba(255,70,70,0.5)'; ctx.lineWidth=2;
+  roundRect(ctx, BASE_W/2-155, BASE_H/2-175, 310, 345, 20);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.textAlign='center';
+
+  ctx.font='46px serif';
+  ctx.fillText('💥', BASE_W/2, BASE_H/2-118);
+
+  ctx.fillStyle='#ff5252';
+  ctx.font='bold 30px "Segoe UI"';
+  ctx.fillText('SPLAT!', BASE_W/2, BASE_H/2-72);
+
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  ctx.font='14px "Segoe UI"';
+  ctx.fillText('Too squishy for that reef!', BASE_W/2, BASE_H/2-45);
+
+  ctx.fillStyle='#fff';
+  ctx.font='bold 44px "Segoe UI"';
+  ctx.fillText(score, BASE_W/2, BASE_H/2+5);
+  ctx.fillStyle='rgba(255,255,255,0.5)';
+  ctx.font='13px "Segoe UI"';
+  ctx.fillText('Score', BASE_W/2, BASE_H/2+25);
+
+  if(score>=best && score>0){
+    ctx.fillStyle='#ffd740';
+    ctx.font='bold 14px "Segoe UI"';
+    ctx.fillText('🏆 New Best: '+best+' 🏆', BASE_W/2, BASE_H/2+52);
+  } else if(best>0){
+    ctx.fillStyle='#ffd740';
+    ctx.font='13px "Segoe UI"';
+    ctx.fillText('Best: '+best, BASE_W/2, BASE_H/2+52);
+  }
+
+  const pulse = 0.93+0.07*Math.sin(frame/15);
+  ctx.save();
+  ctx.translate(BASE_W/2, BASE_H/2+120);
+  ctx.scale(pulse,pulse);
+  const bg=ctx.createLinearGradient(-80,-22,80,22);
+  bg.addColorStop(0,'#ff6d00'); bg.addColorStop(1,'#ff9800');
+  ctx.fillStyle=bg;
+  roundRect(ctx,-90,-26,180,52,26);
+  ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.font='bold 16px "Segoe UI"';
+  ctx.fillText('TAP TO PLAY AGAIN', 0, 7);
+  ctx.restore();
+}
+
+// ── Main loop ──
+function loop(){
+  frame++;
+
+  // Update
+  if(STATE==='PLAY'){
+    // Fish physics
+    fish.vy += GRAVITY;
+    if(fish.vy > 10) fish.vy = 10;
+    fish.y += fish.vy;
+    fish.angle = Math.min(Math.PI/4, Math.max(-Math.PI/4, fish.vy*0.045));
+
+    // Squish spring
+    fish.squish += fish.squishV;
+    fish.squishV += (1-fish.squish)*0.12;
+    fish.squishV *= 0.8;
+
+    // Trail
+    fish.trail.unshift({x:FISH_X-10, y:fish.y});
+    if(fish.trail.length>8) fish.trail.pop();
+
+    // Pipes
+    pipeTimer--;
+    if(pipeTimer<=0){ pipes.push(makePipe(BASE_W+10)); pipeTimer=PIPE_INTERVAL; }
+    pipes.forEach(p=>{ p.x -= PIPE_SPEED; });
+    pipes = pipes.filter(p=>p.x+PIPE_W > -10);
+
+    // Score
+    pipes.forEach(p=>{
+      if(!p.scored && p.x+PIPE_W < FISH_X){
+        p.scored=true; score++;
+        if(score>best){ best=score; localStorage.setItem('sfBest',best); }
+        splashes.push(...makeSplash(FISH_X+30, fish.y, '#76ff03'));
+      }
+    });
+
+    // Splash/bubbles
+    updateBubbles();
+    updateSplashes();
+
+    // Collision
+    if(checkCollision()){
+      STATE='DEAD';
+      for(let i=0;i<30;i++) splashes.push(...makeSplash(FISH_X,fish.y,'#ff5252').slice(0,2));
+    }
+  } else {
+    updateBubbles();
+    if(STATE==='START' && frame%60===0) bubbles.forEach(b=>b.vy*=1.0);
+  }
+
+  // Draw
+  drawBg();
+  drawBubbles();
+
+  if(STATE!=='START'){
+    pipes.forEach(drawPipe);
+    drawFish(fish);
+    drawSplashes();
+    if(STATE==='PLAY') drawScore();
+  }
+
+  if(STATE==='START') drawStartScreen();
+  if(STATE==='DEAD'){ drawPipe; drawScore(); drawDeadScreen(); }
+
+  requestAnimationFrame(loop);
+}
+
+// Init
+initGame();
+loop();
+</script>
+</body>
+</html>
